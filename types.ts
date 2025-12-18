@@ -1,4 +1,3 @@
-
 export interface GenerateImageData {
     prompt: string;
     sourceImages: File[];
@@ -29,6 +28,7 @@ export interface UpscaleImageData {
 export interface CreateImageData {
     prompt: string;
     sourceImages: File[];
+    outfitImage?: File | null;
     aspectRatio: string;
     videoStyle: string;
 }

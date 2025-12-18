@@ -1,10 +1,33 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 
+// Global Aesthetic Rules to be applied to all prompts
+const GLOBAL_AESTHETIC_INSTRUCTION = `
+[STRICT AESTHETIC RULES]:
+1. FEMALE SUBJECTS: Must have fair white skin (da trắng), rosy pink cheeks (má hồng), elegant and delicate facial features (khuôn mặt thanh tú), and the youthful, pretty appearance of exactly an 18-year-old (xinh xắn tuổi 18).
+2. MALE SUBJECTS: Must have a perfect "hotboy" physique (dáng chuẩn hotboy) and a cool, cold, handsome Korean-style visual (vẻ lạnh lùng của trai Hàn Quốc).
+All characters must be exceptionally attractive following these specific standards.
+`;
+
+// Helper to get API Key safely
+const getApiKey = (): string => {
+    // 1. Check LocalStorage (User entered)
+    const storedKey = localStorage.getItem('gemini_api_key');
+    if (storedKey) return storedKey;
+
+    // 2. Check Environment Variable (Hardcoded/Deployed)
+    if (process.env.API_KEY) return process.env.API_KEY;
+
+    throw new Error("API Key chưa được cấu hình. Vui lòng nhập API Key.");
+};
+
 // Helper to handle errors more gracefully
 const handleServiceError = (error: any, context: string) => {
     console.error(`Lỗi ${context}:`, error);
     const msg = error instanceof Error ? error.message : String(error);
     
+    if (msg.includes("API Key")) {
+        throw new Error(msg); // Re-throw API key errors directly
+    }
     if (msg.includes("403") || msg.includes("PERMISSION_DENIED")) {
         throw new Error("Hệ thống từ chối xử lý ảnh này do quy định an toàn (Safety Filters). Vui lòng thử ảnh khác ít nhạy cảm hơn hoặc chụp rõ trang phục hơn.");
     }
@@ -13,6 +36,9 @@ const handleServiceError = (error: any, context: string) => {
     }
     if (msg.includes("SAFETY")) {
         throw new Error("Ảnh hoặc mô tả vi phạm tiêu chuẩn cộng đồng của Google AI.");
+    }
+    if (msg.includes("400") || msg.includes("INVALID_ARGUMENT")) {
+         throw new Error("Yêu cầu không hợp lệ. Vui lòng kiểm tra lại API Key hoặc định dạng ảnh.");
     }
     
     throw new Error(`Banana AI gặp sự cố khi ${context}. ${msg}`);
@@ -24,9 +50,10 @@ export const generateImage = async (
     sourceImages?: { data: string, mimeType: string }[],
     options?: { aspectRatio?: string }
 ): Promise<string> => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
     try {
+        const apiKey = getApiKey();
+        const ai = new GoogleGenAI({ apiKey: apiKey });
+
         // Prepare parts
         const parts: any[] = [];
         
@@ -40,7 +67,9 @@ export const generateImage = async (
             parts.push(...imageParts);
         }
         
-        parts.push({ text: prompt });
+        // Append aesthetic rules to the prompt
+        const augmentedPrompt = `${GLOBAL_AESTHETIC_INSTRUCTION}\n\nUSER PROMPT: ${prompt}`;
+        parts.push({ text: augmentedPrompt });
 
         // Config for Banana (Gemini 2.5 Flash Image)
         const config: any = {
@@ -87,9 +116,10 @@ export const editImage = async (
     accessoryImages: { data: string, mimeType: string }[],
     prompt: string
 ): Promise<string> => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
     try {
+        const apiKey = getApiKey();
+        const ai = new GoogleGenAI({ apiKey: apiKey });
+
         const parts: ({ inlineData: { data: string; mimeType: string; }; } | { text: string; })[] = [
             {
                 inlineData: {
@@ -114,8 +144,10 @@ export const editImage = async (
             });
         });
 
+        // Append aesthetic rules to the prompt
+        const augmentedPrompt = `${GLOBAL_AESTHETIC_INSTRUCTION}\n\nEDITING TASK: ${prompt}`;
         parts.push({
-            text: prompt,
+            text: augmentedPrompt,
         });
 
 
@@ -150,9 +182,10 @@ export const editImage = async (
 export const removeBackgroundImage = async (
     image: { data: string; mimeType: string }
 ): Promise<string> => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
     try {
+        const apiKey = getApiKey();
+        const ai = new GoogleGenAI({ apiKey: apiKey });
+
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash-image',
             contents: {
@@ -189,9 +222,10 @@ export const removeBackgroundImage = async (
 export const separateClothing = async (
     image: { data: string; mimeType: string }
 ): Promise<string> => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
     try {
+        const apiKey = getApiKey();
+        const ai = new GoogleGenAI({ apiKey: apiKey });
+
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash-image',
             contents: {
@@ -203,8 +237,7 @@ export const separateClothing = async (
                         },
                     },
                     {
-                        // Updated prompt to be "safer" and avoid 403 Permission Denied errors (usually due to perceived body modification/nudity).
-                        // Focuses on "flat lay" and "product photography" instead of "removing the person".
+                        // Updated prompt to be "safer" and avoid 403 Permission Denied errors.
                         text: "Create a flat lay product photography of the outfit in this image. Isolate the clothing on a pure white background. Do not show any person or body parts. Focus only on the textile and design.",
                     },
                 ],
@@ -231,9 +264,10 @@ export const upscaleImage = async (
     faceReference: { data: string, mimeType: string } | null,
     prompt: string
 ): Promise<string> => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
     try {
+        const apiKey = getApiKey();
+        const ai = new GoogleGenAI({ apiKey: apiKey });
+
         const parts: any[] = [];
         
         parts.push({
@@ -252,7 +286,9 @@ export const upscaleImage = async (
             });
         }
 
-        parts.push({ text: prompt });
+        // Append aesthetic rules to the upscale prompt
+        const augmentedPrompt = `${GLOBAL_AESTHETIC_INSTRUCTION}\n\nUPSCALE & ENHANCE TASK: ${prompt}`;
+        parts.push({ text: augmentedPrompt });
 
         // Sử dụng gemini-2.5-flash-image (Banana)
         const response = await ai.models.generateContent({

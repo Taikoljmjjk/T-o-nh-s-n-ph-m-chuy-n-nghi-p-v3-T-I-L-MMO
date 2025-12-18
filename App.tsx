@@ -4,6 +4,7 @@ import { ImageEditor } from './components/ImageEditor';
 import { ImageDisplay } from './components/ImageDisplay';
 import { ImageUpscaler } from './components/ImageUpscaler';
 import { ImageCreator } from './components/ImageCreator';
+import { ApiKeyInput } from './components/ApiKeyInput'; // Import new component
 import { Tabs } from './components/ui/Tabs';
 import { generateImage, editImage, upscaleImage } from './services/geminiService';
 import { processImageFile } from './utils/fileUtils';
@@ -13,13 +14,25 @@ import { ImageIcon } from './components/ui/Icon';
 type Tab = 'generate' | 'edit' | 'upscale' | 'create';
 
 const App: React.FC = () => {
+    const [apiKey, setApiKey] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<Tab>('generate');
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [loadingMessage, setLoadingMessage] = useState<string>('');
-    const [generatedImages, setGeneratedImages] = useState<string[]>([]); // Changed to array
+    const [generatedImages, setGeneratedImages] = useState<string[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [timer, setTimer] = useState<number>(0);
     const [veoPrompt, setVeoPrompt] = useState<string | null>(null);
+
+    // Check for API Key on mount
+    useEffect(() => {
+        const storedKey = localStorage.getItem('gemini_api_key');
+        if (storedKey) {
+            setApiKey(storedKey);
+        } else if (process.env.API_KEY) {
+            // If environment variable exists, we treat it as logged in
+            setApiKey(process.env.API_KEY);
+        }
+    }, []);
 
     useEffect(() => {
         let interval: ReturnType<typeof setInterval> | null = null;
@@ -34,6 +47,18 @@ const App: React.FC = () => {
             if (interval) clearInterval(interval);
         };
     }, [isLoading]);
+
+    const handleSaveApiKey = (key: string) => {
+        localStorage.setItem('gemini_api_key', key);
+        setApiKey(key);
+    };
+
+    const handleClearApiKey = () => {
+        localStorage.removeItem('gemini_api_key');
+        setApiKey(null);
+        setGeneratedImages([]);
+        setError(null);
+    };
 
     const handleGenerateImage = async (data: GenerateImageData) => {
         setTimer(0);
@@ -169,12 +194,20 @@ const App: React.FC = () => {
         setLoadingMessage('Banana Nano đang vẽ 4 bức tranh nghệ thuật...');
 
         try {
-            let refImagesProcessed: { data: string; mimeType: string }[] | undefined = undefined;
+            let inputsB64: { data: string; mimeType: string }[] = [];
 
+            // Process source images (background/style reference)
             if (data.sourceImages && data.sourceImages.length > 0) {
-                 refImagesProcessed = await Promise.all(
+                 const refs = await Promise.all(
                     data.sourceImages.map(file => processImageFile(file))
                 );
+                 inputsB64 = [...inputsB64, ...refs];
+            }
+
+            // Process outfit image if provided
+            if (data.outfitImage) {
+                const outfitProcessed = await processImageFile(data.outfitImage);
+                inputsB64.push(outfitProcessed);
             }
 
             const variations = [
@@ -185,8 +218,14 @@ const App: React.FC = () => {
             ];
 
             const promises = variations.map(async (variant) => {
-                const finalPrompt = `${data.prompt}. ${variant.suffix}`;
-                const imageB64 = await generateImage(finalPrompt, refImagesProcessed, { aspectRatio: data.aspectRatio });
+                let finalPrompt = `${data.prompt}. ${variant.suffix}`;
+                
+                // If outfit is provided, make sure the prompt emphasizes wearing it
+                if (data.outfitImage) {
+                    finalPrompt = `Character must be wearing the exact outfit from the provided image. ${finalPrompt}`;
+                }
+
+                const imageB64 = await generateImage(finalPrompt, inputsB64.length > 0 ? inputsB64 : undefined, { aspectRatio: data.aspectRatio });
                 return `data:image/jpeg;base64,${imageB64}`;
             });
 
@@ -290,6 +329,11 @@ const App: React.FC = () => {
         }
     };
 
+    // If no API key, render the Input screen
+    if (!apiKey) {
+        return <ApiKeyInput onSave={handleSaveApiKey} />;
+    }
+
     const tabs = [
         { id: 'generate', label: 'Tạo ảnh Chân dung / Face ID' },
         { id: 'create', label: 'Tạo ảnh Banana Nano' },
@@ -300,20 +344,29 @@ const App: React.FC = () => {
     return (
         <div className="min-h-screen bg-slate-50 text-slate-700 font-sans p-2 sm:p-4 w-full">
             <div className="w-full mx-auto px-2 lg:px-6">
-                <header className="text-center mb-8 pt-4">
-                    <div className="inline-flex items-center gap-3">
-                         <div className="bg-indigo-600 p-2 rounded-lg">
-                            <ImageIcon className="w-8 h-8 text-white" />
-                         </div>
-                         <h1 className="text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight">Tạo Ảnh Sản Phẩm Chuyên Nghiệp</h1>
+                <header className="flex flex-col md:flex-row items-center justify-between mb-8 pt-4 gap-4">
+                    <div className="text-center md:text-left">
+                        <div className="inline-flex items-center gap-3">
+                             <div className="bg-indigo-600 p-2 rounded-lg">
+                                <ImageIcon className="w-8 h-8 text-white" />
+                             </div>
+                             <h1 className="text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight">Tạo Ảnh Sản Phẩm Chuyên Nghiệp</h1>
+                        </div>
+                        <p className="mt-2 text-sm md:text-base text-slate-600">
+                            Chủ app Tài Lê MMO: 0394342601.{' '}
+                            <a href="https://zalo.me/g/drfpfr389" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:text-indigo-500 font-medium hover:underline">
+                              Cộng đồng tài nguyên miễn phí TÀI LÊ MMO
+                            </a>
+                        </p>
                     </div>
-                    <p className="mt-3 text-lg text-slate-600">
-                        Chủ app Tài Lê MMO: 0394342601.{' '}
-                        <a href="https://zalo.me/g/drfpfr389" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:text-indigo-500 font-medium hover:underline">
-                          Cộng đồng tài nguyên miễn phí TÀI LÊ MMO
-                        </a>
-                        {' '}để được hỗ trợ.
-                    </p>
+
+                    <button
+                        onClick={handleClearApiKey}
+                        className="text-xs bg-white border border-slate-300 px-3 py-1.5 rounded-full text-slate-500 hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors shadow-sm"
+                        title="Xóa Key khỏi trình duyệt"
+                    >
+                        Đổi API Key
+                    </button>
                 </header>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">

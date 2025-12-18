@@ -1,7 +1,9 @@
 import React, { useState, useRef } from 'react';
 import { Button } from './ui/Button';
 import type { CreateImageData } from '../types';
-import { PaletteIcon, UploadIcon } from './ui/Icon';
+import { PaletteIcon, UploadIcon, ShirtIcon, WandIcon } from './ui/Icon';
+import { separateClothing } from '../services/geminiService';
+import { processImageFile } from '../utils/fileUtils';
 
 interface ImageCreatorProps {
     onCreate: (data: CreateImageData) => void;
@@ -25,7 +27,6 @@ const VIDEO_STYLES = [
     { id: 'Nature Organic', label: '🌿 Nature / Organic (Thiên nhiên, Tươi mát)', desc: 'Ánh sáng tự nhiên, gió thổi nhẹ, cảm giác trong lành.' },
 ];
 
-// DATA: Posing Suggestions
 const POSING_GROUPS = [
     {
         label: "A. Dáng Di Chuyển & Chuyển Động (Movement)",
@@ -69,7 +70,6 @@ const POSING_GROUPS = [
     }
 ];
 
-// DATA: Fashion Trends 2025
 const FASHION_GROUPS = [
     {
         label: "A. Women: Tối Giản & Thanh Lịch (Minimalism)",
@@ -116,7 +116,6 @@ const FASHION_GROUPS = [
             { id: "Matching Set", label: "Áo Nỉ Bộ (Athleisure)", prompt: "Wearing Matching Sweat Set: Bộ nỉ thể thao năng động đơn giản." }
         ]
     },
-    // NEW MEN'S FASHION GROUPS
     {
         label: "E. Men's Classic (Nam: Lịch Lãm & Cổ Điển)",
         options: [
@@ -175,12 +174,17 @@ export const ImageCreator: React.FC<ImageCreatorProps> = ({ onCreate, isLoading 
     const [videoStyle, setVideoStyle] = useState<string>(VIDEO_STYLES[0].id);
     const [sourceImages, setSourceImages] = useState<File[]>([]);
     const [previews, setPreviews] = useState<string[]>([]);
+    const [outfitImage, setOutfitImage] = useState<File | null>(null);
+    const [outfitPreview, setOutfitPreview] = useState<string | null>(null);
     
-    // New State for Suggestions
     const [selectedPose, setSelectedPose] = useState<string>('');
     const [selectedFashion, setSelectedFashion] = useState<string>('');
+
+    const [isSeparatingOutfit, setIsSeparatingOutfit] = useState<boolean>(false);
+    const [outfitSeparationError, setOutfitSeparationError] = useState<string | null>(null);
     
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const outfitInputRef = useRef<HTMLInputElement>(null);
 
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.files) {
@@ -201,17 +205,59 @@ export const ImageCreator: React.FC<ImageCreatorProps> = ({ onCreate, isLoading 
         }
     };
 
+    const handleOutfitChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+        if (event.target.files && event.target.files[0]) {
+            const file = event.target.files[0];
+            setOutfitImage(file);
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                setOutfitPreview(e.target?.result as string);
+                setOutfitSeparationError(null);
+            };
+            reader.readAsDataURL(file);
+        }
+    };
+
+    const handleSeparateOutfit = async () => {
+        if (!outfitImage) return;
+        
+        setIsSeparatingOutfit(true);
+        setOutfitSeparationError(null);
+        
+        try {
+            const imagePart = await processImageFile(outfitImage);
+            const resultB64 = await separateClothing(imagePart);
+            
+            const newPreview = `data:image/png;base64,${resultB64}`;
+            const response = await fetch(newPreview);
+            const blob = await response.blob();
+            const newFile = new File([blob], `separated-${outfitImage.name.replace(/\.[^/.]+$/, "")}.png`, { type: 'image/png' });
+
+            setOutfitImage(newFile);
+            setOutfitPreview(newPreview);
+        } catch (err) {
+            setOutfitSeparationError(err instanceof Error ? err.message : "Không thể tách trang phục.");
+        } finally {
+            setIsSeparatingOutfit(false);
+        }
+    };
+
     const removeImage = (indexToRemove: number) => {
         setSourceImages(prev => prev.filter((_, index) => index !== indexToRemove));
         setPreviews(prev => prev.filter((_, index) => index !== indexToRemove));
     };
 
+    const removeOutfit = () => {
+        setOutfitImage(null);
+        setOutfitPreview(null);
+        setOutfitSeparationError(null);
+        if (outfitInputRef.current) outfitInputRef.current.value = '';
+    };
+
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         
-        // Combine prompt with selected suggestions
         let finalPrompt = prompt;
-        
         const additionalDetails = [];
         if (selectedPose) additionalDetails.push(`[POSE/ACTION]: ${selectedPose}`);
         if (selectedFashion) additionalDetails.push(`[FASHION STYLE 2025]: ${selectedFashion}`);
@@ -221,7 +267,7 @@ export const ImageCreator: React.FC<ImageCreatorProps> = ({ onCreate, isLoading 
         }
 
         if (finalPrompt.trim()) {
-            onCreate({ prompt: finalPrompt, sourceImages, aspectRatio, videoStyle });
+            onCreate({ prompt: finalPrompt, sourceImages, outfitImage, aspectRatio, videoStyle });
         }
     };
 
@@ -239,57 +285,115 @@ export const ImageCreator: React.FC<ImageCreatorProps> = ({ onCreate, isLoading 
                 </div>
             </div>
 
-            {/* Image Reference Upload */}
-            <div>
-                <label className="flex justify-between items-center text-sm font-semibold text-slate-700 mb-2">
-                    1. Ảnh tham khảo (Image-to-Image) - Tùy chọn
-                    <span className="text-xs font-normal text-slate-500">Tải lên nhiều ảnh</span>
-                </label>
-                
-                <input
-                    type="file"
-                    ref={fileInputRef}
-                    multiple
-                    accept="image/*"
-                    onChange={handleFileChange}
-                    className="hidden"
-                />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* 1. Image Reference Upload */}
+                <div>
+                    <label className="flex justify-between items-center text-sm font-semibold text-slate-700 mb-2">
+                        1. Ảnh bối cảnh tham khảo
+                        <span className="text-xs font-normal text-slate-500">Tải lên nhiều ảnh</span>
+                    </label>
+                    
+                    <input
+                        type="file"
+                        ref={fileInputRef}
+                        multiple
+                        accept="image/*"
+                        onChange={handleFileChange}
+                        className="hidden"
+                    />
 
-                <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full h-32 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 hover:border-indigo-400 transition bg-white"
-                >
-                    <UploadIcon className="w-8 h-8 text-slate-400 mb-2" />
-                    <span className="text-sm text-slate-500 font-medium">Nhấn để tải ảnh tham khảo</span>
-                    <span className="text-xs text-slate-400 mt-1">Hỗ trợ JPG, PNG (Nhiều ảnh)</span>
-                </button>
+                    <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="w-full h-32 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 hover:border-indigo-400 transition bg-white shadow-sm"
+                    >
+                        <UploadIcon className="w-8 h-8 text-slate-400 mb-2" />
+                        <span className="text-xs text-slate-500 font-medium">Chọn ảnh bối cảnh</span>
+                    </button>
 
-                {previews.length > 0 && (
-                    <div className="mt-3 grid grid-cols-4 sm:grid-cols-5 gap-2">
-                        {previews.map((src, index) => (
-                            <div key={index} className="relative group aspect-square">
-                                <img src={src} alt={`Ref ${index}`} className="w-full h-full object-cover rounded-md border border-slate-200" />
+                    {previews.length > 0 && (
+                        <div className="mt-3 grid grid-cols-4 gap-2">
+                            {previews.map((src, index) => (
+                                <div key={index} className="relative aspect-square shadow-sm">
+                                    <img src={src} alt={`Ref ${index}`} className="w-full h-full object-cover rounded-md border border-slate-200" />
+                                    <button
+                                        type="button"
+                                        onClick={() => removeImage(index)}
+                                        className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-md hover:bg-red-600"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {/* 2. Outfit Upload */}
+                <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">
+                        2. Ảnh Trang phục (Outfit)
+                    </label>
+                    <input
+                        type="file"
+                        ref={outfitInputRef}
+                        accept="image/*"
+                        onChange={handleOutfitChange}
+                        className="hidden"
+                    />
+                    {!outfitPreview ? (
+                        <button
+                            type="button"
+                            onClick={() => outfitInputRef.current?.click()}
+                            className="w-full h-32 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 hover:border-indigo-400 transition bg-white shadow-sm"
+                        >
+                            <ShirtIcon className="w-8 h-8 text-slate-400 mb-2" />
+                            <span className="text-xs text-slate-500 font-medium text-center px-4">Tải ảnh trang phục (có thể có mẫu)</span>
+                        </button>
+                    ) : (
+                        <div className="space-y-2">
+                            <div className="relative w-full h-32 border border-slate-200 rounded-lg overflow-hidden group bg-slate-50 shadow-sm">
+                                <img src={outfitPreview} alt="Outfit" className="w-full h-full object-contain" />
                                 <button
                                     type="button"
-                                    onClick={() => removeImage(index)}
-                                    className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-sm hover:bg-red-600"
+                                    onClick={removeOutfit}
+                                    className="absolute top-2 right-2 bg-white text-red-500 p-1 rounded-full shadow-md hover:bg-red-50 transition-colors"
                                 >
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                                         <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
                                     </svg>
                                 </button>
                             </div>
-                        ))}
-                    </div>
-                )}
+                            <button
+                                type="button"
+                                onClick={handleSeparateOutfit}
+                                disabled={isLoading || isSeparatingOutfit}
+                                className="w-full flex items-center justify-center py-2 px-3 border border-indigo-200 text-xs font-bold rounded-lg text-indigo-700 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 transition-all shadow-sm"
+                            >
+                                {isSeparatingOutfit ? (
+                                    <>
+                                        <div className="w-3 h-3 border-2 border-indigo-700 border-t-transparent rounded-full animate-spin mr-2"></div>
+                                        Đang tách lấy trang phục...
+                                    </>
+                                ) : (
+                                    <>
+                                        <ShirtIcon className="w-4 h-4 mr-2" />
+                                        Tách trang phục (Isolate Clothing)
+                                    </>
+                                )}
+                            </button>
+                            {outfitSeparationError && <p className="text-[10px] text-red-500 font-medium">{outfitSeparationError}</p>}
+                        </div>
+                    )}
+                </div>
             </div>
             
-            {/* New Suggestion Dropdowns */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="bg-white p-3 rounded-lg border border-slate-200">
                     <label htmlFor="pose-select" className="block text-sm font-semibold text-slate-700 mb-2">
-                        2a. Gợi ý Dáng chụp (Posing)
+                        3a. Gợi ý Dáng chụp (Posing)
                     </label>
                     <select
                         id="pose-select"
@@ -312,7 +416,7 @@ export const ImageCreator: React.FC<ImageCreatorProps> = ({ onCreate, isLoading 
 
                 <div className="bg-white p-3 rounded-lg border border-slate-200">
                     <label htmlFor="fashion-select" className="block text-sm font-semibold text-slate-700 mb-2">
-                        2b. Xu hướng Thời trang 2025
+                        3b. Xu hướng Thời trang 2025
                     </label>
                     <select
                         id="fashion-select"
@@ -334,17 +438,16 @@ export const ImageCreator: React.FC<ImageCreatorProps> = ({ onCreate, isLoading 
                 </div>
             </div>
 
-            {/* Video Style Selection */}
             <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
                 <label htmlFor="video-style" className="block text-sm font-semibold text-slate-700 mb-2">
-                    3. Phong cách quảng cáo Veo3 (Video)
+                    4. Phong cách quảng cáo Veo3 (Video)
                 </label>
                 <div className="relative">
                     <select
                         id="video-style"
                         value={videoStyle}
                         onChange={(e) => setVideoStyle(e.target.value)}
-                        className="w-full pl-4 pr-10 py-3 text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent appearance-none shadow-sm cursor-pointer"
+                        className="w-full pl-4 pr-10 py-3 text-slate-900 bg-white border border-slate-300 rounded-lg appearance-none shadow-sm cursor-pointer"
                     >
                         {VIDEO_STYLES.map((style) => (
                             <option key={style.id} value={style.id}>
@@ -352,43 +455,34 @@ export const ImageCreator: React.FC<ImageCreatorProps> = ({ onCreate, isLoading 
                             </option>
                         ))}
                     </select>
-                    <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
-                        <svg className="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none text-slate-500">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path>
                         </svg>
                     </div>
                 </div>
-                <p className="mt-2 text-xs text-indigo-600">
-                    *Mô tả: {VIDEO_STYLES.find(s => s.id === videoStyle)?.desc}
-                </p>
             </div>
 
-            {/* Prompt Input */}
             <div>
                 <label htmlFor="create-prompt" className="block text-sm font-semibold text-slate-700 mb-2">
-                    4. Mô tả ý tưởng ảnh (Context)
+                    5. Mô tả ý tưởng (Context)
                 </label>
                 <textarea
                     id="create-prompt"
-                    rows={5}
-                    className="w-full px-4 py-3 text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition placeholder-slate-400 shadow-sm"
+                    rows={4}
+                    className="w-full px-4 py-3 text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition shadow-sm"
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
-                    placeholder="Mô tả bối cảnh chính, ví dụ: Trên đường phố New York nhộn nhịp, ánh nắng hoàng hôn..."
+                    placeholder="Mô tả bối cảnh chính..."
                     maxLength={2000}
                 />
-                 <div className="flex justify-between mt-2 text-xs text-slate-500">
-                    <span>AI sẽ tự động ghép Dáng & Trang phục đã chọn ở trên vào prompt này.</span>
-                    <span className="text-right">{prompt.length}/2000</span>
-                 </div>
             </div>
 
-            {/* Aspect Ratio Selection */}
             <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-3">
-                    5. Chọn tỷ lệ khung hình
+                    6. Chọn tỷ lệ khung hình
                 </label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                     {ASPECT_RATIOS.map((ratio) => (
                         <button
                             key={ratio.id}
@@ -397,7 +491,7 @@ export const ImageCreator: React.FC<ImageCreatorProps> = ({ onCreate, isLoading 
                             className={`flex flex-col items-center justify-center p-3 rounded-lg border transition-all ${
                                 aspectRatio === ratio.id
                                     ? 'bg-indigo-50 border-indigo-500 text-indigo-700 ring-1 ring-indigo-500'
-                                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300'
+                                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                             }`}
                         >
                             <span className="text-2xl mb-1">{ratio.icon}</span>
@@ -407,8 +501,8 @@ export const ImageCreator: React.FC<ImageCreatorProps> = ({ onCreate, isLoading 
                 </div>
             </div>
 
-            <div className="pt-4">
-                <Button type="submit" disabled={isLoading || (!prompt.trim() && !selectedPose && !selectedFashion)} className="w-full py-4 text-lg">
+            <div className="pt-2">
+                <Button type="submit" disabled={isLoading || isSeparatingOutfit || (!prompt.trim() && !selectedPose && !selectedFashion)} className="w-full py-4 text-lg">
                     <PaletteIcon className="w-6 h-6 mr-2" />
                     {isLoading ? 'Banana Nano đang chạy...' : 'Kích hoạt Banana Nano'}
                 </Button>
